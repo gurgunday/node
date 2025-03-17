@@ -649,6 +649,82 @@ describe('forceExit', () => {
   });
 });
 
+describe('filter patterns work with different isolation modes', () => {
+  // Create temporary test files
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-isolation-'));
+  const testFilePath = path.join(tempDir, 'filter-test.js');
+  
+  // Create a test file with multiple tests
+  fs.writeFileSync(testFilePath, `
+    import { test } from 'node:test';
+
+    test("a1", (t) => {
+      console.log("a1-executed");
+    });
+
+    test("a2", (t) => {
+      console.log("a2-executed");
+    });
+
+    test("b1", (t) => {
+      console.log("b1-executed");
+    });
+  `);
+
+  // Clean up after all tests
+  after(() => {
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (err) {
+      console.error('Error cleaning up:', err);
+    }
+  });
+
+  async function runWithOptions(options) {
+    const stream = run({
+      files: [testFilePath],
+      ...options
+    });
+    
+    const output = { stdout: '', messages: [] };
+    
+    for await (const data of stream) {
+      if (data.type === 'test:stdout') {
+        output.stdout += data.data.message;
+      }
+      output.messages.push(data);
+    }
+    
+    return output;
+  }
+
+  it('should properly filter tests with isolation="process"', async () => {
+    const output = await runWithOptions({
+      testNamePatterns: ['a'],
+      testSkipPatterns: ['a2'],
+      isolation: 'process'
+    });
+    
+    // Should only see output from a1
+    assert.match(output.stdout, /a1-executed/);
+    assert.doesNotMatch(output.stdout, /a2-executed/);
+    assert.doesNotMatch(output.stdout, /b1-executed/);
+  });
+
+  it('should properly filter tests with isolation="none"', async () => {
+    const output = await runWithOptions({
+      testNamePatterns: ['a'],
+      testSkipPatterns: ['a2'],
+      isolation: 'none'
+    });
+    
+    // Should only see output from a1
+    assert.match(output.stdout, /a1-executed/);
+    assert.doesNotMatch(output.stdout, /a2-executed/);
+    assert.doesNotMatch(output.stdout, /b1-executed/);
+  });
+});
+
 
 // exitHandler doesn't run until after the tests / after hooks finish.
 process.on('exit', () => {
