@@ -1419,6 +1419,30 @@ std::pair<void*, size_t> DecomposeBufferToParts(Local<Value> buffer) {
 
 }  // namespace
 
+static inline void CopyArrayBufferImpl(Local<Value> destination_obj,
+                                       uint32_t destination_offset,
+                                       Local<Value> source_obj,
+                                       uint32_t source_offset,
+                                       uint32_t bytes_to_copy) {
+  void* destination;
+  size_t destination_byte_length;
+  std::tie(destination, destination_byte_length) =
+      DecomposeBufferToParts(destination_obj);
+
+  void* source;
+  size_t source_byte_length;
+  std::tie(source, source_byte_length) = DecomposeBufferToParts(source_obj);
+
+  CHECK_GE(destination_byte_length - destination_offset,
+           static_cast<size_t>(bytes_to_copy));
+  CHECK_GE(source_byte_length - source_offset,
+           static_cast<size_t>(bytes_to_copy));
+
+  uint8_t* dest = static_cast<uint8_t*>(destination) + destination_offset;
+  uint8_t* src = static_cast<uint8_t*>(source) + source_offset;
+  memcpy(dest, src, static_cast<size_t>(bytes_to_copy));
+}
+
 void CopyArrayBuffer(const FunctionCallbackInfo<Value>& args) {
   // args[0] == Destination ArrayBuffer
   // args[1] == Destination ArrayBuffer Offset
@@ -1432,26 +1456,36 @@ void CopyArrayBuffer(const FunctionCallbackInfo<Value>& args) {
   CHECK(args[3]->IsUint32());
   CHECK(args[4]->IsUint32());
 
-  void* destination;
-  size_t destination_byte_length;
-  std::tie(destination, destination_byte_length) =
-      DecomposeBufferToParts(args[0]);
+  const uint32_t destination_offset = args[1].As<Uint32>()->Value();
+  const uint32_t source_offset = args[3].As<Uint32>()->Value();
+  const uint32_t bytes_to_copy = args[4].As<Uint32>()->Value();
 
-  void* source;
-  size_t source_byte_length;
-  std::tie(source, source_byte_length) = DecomposeBufferToParts(args[2]);
-
-  uint32_t destination_offset = args[1].As<Uint32>()->Value();
-  uint32_t source_offset = args[3].As<Uint32>()->Value();
-  size_t bytes_to_copy = args[4].As<Uint32>()->Value();
-
-  CHECK_GE(destination_byte_length - destination_offset, bytes_to_copy);
-  CHECK_GE(source_byte_length - source_offset, bytes_to_copy);
-
-  uint8_t* dest = static_cast<uint8_t*>(destination) + destination_offset;
-  uint8_t* src = static_cast<uint8_t*>(source) + source_offset;
-  memcpy(dest, src, bytes_to_copy);
+  CopyArrayBufferImpl(
+    args[0], destination_offset, args[2], source_offset, bytes_to_copy);
 }
+
+uint32_t FastCopyArrayBuffer(Local<Value>,
+                            Local<Value> destination_obj,
+                            uint32_t destination_offset,
+                            Local<Value> source_obj,
+                            uint32_t source_offset,
+                            uint32_t bytes_to_copy,
+                            // NOLINTNEXTLINE(runtime/references)
+                            FastApiCallbackOptions& options) {
+  HandleScope scope(options.isolate);
+  TRACK_V8_FAST_API_CALL("buffer.copyArrayBuffer");
+
+  CopyArrayBufferImpl(
+      destination_obj,
+      destination_offset,
+      source_obj,
+      source_offset,
+      bytes_to_copy);
+
+  return bytes_to_copy;
+}
+
+static CFunction fast_copy_array_buffer(CFunction::Make(FastCopyArrayBuffer));
 
 template <encoding encoding>
 uint32_t WriteOneByteString(const char* src,
@@ -1579,7 +1613,11 @@ void Initialize(Local<Object> target,
                             &fast_index_of_number);
   SetMethodNoSideEffect(context, target, "indexOfString", IndexOfString);
 
-  SetMethod(context, target, "copyArrayBuffer", CopyArrayBuffer);
+  SetFastMethod(context,
+                target,
+                "copyArrayBuffer",
+                CopyArrayBuffer,
+                &fast_copy_array_buffer);
 
   SetMethod(context, target, "swap16", Swap16);
   SetMethod(context, target, "swap32", Swap32);
@@ -1682,6 +1720,7 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(GetZeroFillToggle);
 
   registry->Register(CopyArrayBuffer);
+  registry->Register(fast_copy_array_buffer);
 
   registry->Register(Atob);
   registry->Register(Btoa);
