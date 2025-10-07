@@ -1678,13 +1678,13 @@ static void CRC32(const FunctionCallbackInfo<Value>& args) {
 }
 
 static uint32_t FastCRC32(v8::Local<v8::Value> receiver,
-                          v8::Local<v8::Value> data,
-                          uint32_t value,
-                          // NOLINTNEXTLINE(runtime/references)
-                          v8::FastApiCallbackOptions& options) {
+                          const v8::FastApiTypedArray<uint8_t>& data,
+                          uint32_t value) {
   TRACK_V8_FAST_API_CALL("zlib.crc32");
-  v8::HandleScope handle_scope(options.isolate);
-  return CRC32Impl(options.isolate, data, value);
+  uint8_t* ptr;
+  CHECK(data.getStorageIfAligned(&ptr));
+  return static_cast<uint32_t>(
+      crc32(value, reinterpret_cast<const Bytef*>(ptr), data.length()));
 }
 
 static CFunction fast_crc32_(CFunction::Make(FastCRC32));
