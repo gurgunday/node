@@ -43,6 +43,7 @@ using v8::Array;
 using v8::ArrayBuffer;
 using v8::CFunction;
 using v8::Context;
+using v8::FastApiCallbackOptions;
 using v8::Float64Array;
 using v8::Function;
 using v8::FunctionCallbackInfo;
@@ -253,10 +254,26 @@ static void GetConstrainedMemory(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(static_cast<double>(value));
 }
 
+static double FastGetConstrainedMemory(Local<Value> receiver) {
+  TRACK_V8_FAST_API_CALL("process.constrainedMemory");
+  return static_cast<double>(uv_get_constrained_memory());
+}
+
+static CFunction fast_get_constrained_memory_(
+    CFunction::Make(FastGetConstrainedMemory));
+
 static void GetAvailableMemory(const FunctionCallbackInfo<Value>& args) {
   uint64_t value = uv_get_available_memory();
   args.GetReturnValue().Set(static_cast<double>(value));
 }
+
+static double FastGetAvailableMemory(Local<Value> receiver) {
+  TRACK_V8_FAST_API_CALL("process.availableMemory");
+  return static_cast<double>(uv_get_available_memory());
+}
+
+static CFunction fast_get_available_memory_(
+    CFunction::Make(FastGetAvailableMemory));
 
 void RawDebug(const FunctionCallbackInfo<Value>& args) {
   CHECK(args.Length() == 1 && args[0]->IsString() &&
@@ -285,13 +302,27 @@ static void Umask(const FunctionCallbackInfo<Value>& args) {
   args.GetReturnValue().Set(old);
 }
 
-static void Uptime(const FunctionCallbackInfo<Value>& args) {
-  Environment* env = Environment::GetCurrent(args);
-
+static double UptimeImpl(Environment* env) {
   uv_update_time(env->event_loop());
   double uptime =
       static_cast<double>(uv_hrtime() - per_process::node_start_time);
-  Local<Number> result = Number::New(env->isolate(), uptime / NANOS_PER_SEC);
+  return uptime / NANOS_PER_SEC;
+}
+
+static double FastUptime(Local<Value> receiver,
+                         // NOLINTNEXTLINE(runtime/references)
+                         FastApiCallbackOptions& options) {
+  TRACK_V8_FAST_API_CALL("process.uptime");
+  Environment* env = Environment::GetCurrent(
+      options.isolate->GetCurrentContext());
+  return UptimeImpl(env);
+}
+
+static CFunction fast_uptime_(CFunction::Make(FastUptime));
+
+static void Uptime(const FunctionCallbackInfo<Value>& args) {
+  Environment* env = Environment::GetCurrent(args);
+  Local<Number> result = Number::New(env->isolate(), UptimeImpl(env));
   args.GetReturnValue().Set(result);
 }
 
@@ -790,8 +821,16 @@ static void CreatePerIsolateProperties(IsolateData* isolate_data,
 
   SetMethod(isolate, target, "umask", Umask);
   SetMethod(isolate, target, "memoryUsage", MemoryUsage);
-  SetMethod(isolate, target, "constrainedMemory", GetConstrainedMemory);
-  SetMethod(isolate, target, "availableMemory", GetAvailableMemory);
+  SetFastMethodNoSideEffect(isolate,
+                            target,
+                            "constrainedMemory",
+                            GetConstrainedMemory,
+                            &fast_get_constrained_memory_);
+  SetFastMethodNoSideEffect(isolate,
+                            target,
+                            "availableMemory",
+                            GetAvailableMemory,
+                            &fast_get_available_memory_);
   SetMethod(isolate, target, "rss", Rss);
   SetMethod(isolate, target, "cpuUsage", CPUUsage);
   SetMethod(isolate, target, "threadCpuUsage", ThreadCPUUsage);
@@ -811,7 +850,7 @@ static void CreatePerIsolateProperties(IsolateData* isolate_data,
 #if defined __POSIX__ && !defined(__PASE__)
   SetMethod(isolate, target, "execve", Execve);
 #endif
-  SetMethodNoSideEffect(isolate, target, "uptime", Uptime);
+  SetFastMethodNoSideEffect(isolate, target, "uptime", Uptime, &fast_uptime_);
   SetMethod(isolate, target, "patchProcessObject", PatchProcessObject);
 
   SetMethod(isolate, target, "loadEnvFile", LoadEnvFile);
@@ -840,7 +879,9 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(RawDebug);
   registry->Register(MemoryUsage);
   registry->Register(GetConstrainedMemory);
+  registry->Register(fast_get_constrained_memory_);
   registry->Register(GetAvailableMemory);
+  registry->Register(fast_get_available_memory_);
   registry->Register(Rss);
   registry->Register(CPUUsage);
   registry->Register(ThreadCPUUsage);
@@ -859,6 +900,7 @@ void RegisterExternalReferences(ExternalReferenceRegistry* registry) {
   registry->Register(Execve);
 #endif
   registry->Register(Uptime);
+  registry->Register(fast_uptime_);
   registry->Register(PatchProcessObject);
 
   registry->Register(LoadEnvFile);
